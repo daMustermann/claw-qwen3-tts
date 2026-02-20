@@ -11,3 +11,4 @@ aiofiles
 python-telegram-bot>=21.0
 pydantic>=2.0
 huggingface-hub[hf_xet]
+flash-attn --no-build-isolation
