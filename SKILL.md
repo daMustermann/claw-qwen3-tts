@@ -7,7 +7,7 @@ description: >
   Auto-detects GPU hardware (CUDA, ROCm, Intel XPU, CPU).
 version: "1.0"
 author: daMustermann
-repository: https://github.com/daMustermann/qwen3-tts
+repository: https://github.com/daMustermann/claw-qwen3-tts
 license: MIT
 requires:
   - python>=3.10

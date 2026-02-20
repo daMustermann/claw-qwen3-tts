@@ -1,6 +1,6 @@
 # Qwen3-TTS OpenClaw Skill — Complete Implementation Plan
 
-> **Author:** [daMustermann](https://github.com/daMustermann) · **Version:** 1.0 · **License:** MIT · **ClawHub:** `daMustermann/qwen3-tts`
+> **Author:** [daMustermann](https://github.com/daMustermann) · **Version:** 1.0 · **License:** MIT · **ClawHub:** `daMustermann/claw-qwen3-tts`
 
 ## Overview
 
@@ -66,7 +66,7 @@ description: >
   Auto-detects GPU hardware (CUDA, ROCm, Intel XPU, CPU).
 version: "1.0"
 author: daMustermann
-repository: https://github.com/daMustermann/qwen3-tts
+repository: https://github.com/daMustermann/claw-qwen3-tts
 license: MIT
 requires:
   - python>=3.10
@@ -735,7 +735,7 @@ This skill is designed to be **shared on GitHub and ClawHub** as a standalone in
 ### 14.1 GitHub Repository Structure
 
 ```
-github.com/daMustermann/qwen3-tts
+github.com/daMustermann/claw-qwen3-tts
 ├── SKILL.md            # OpenClaw reads this
 ├── README.md           # Human-readable docs, badges, screenshots
 ├── LICENSE             # MIT
@@ -781,11 +781,11 @@ server.log
 
 Users install the skill from ClawHub with:
 ```bash
-claw install daMustermann/qwen3-tts
+claw install daMustermann/claw-qwen3-tts
 ```
 or manually by cloning into their skills directory:
 ```bash
-git clone https://github.com/daMustermann/qwen3-tts.git ~/clawd/skills/qwen3-tts
+git clone https://github.com/daMustermann/claw-qwen3-tts.git ~/clawd/skills/qwen3-tts
 ```
 
 On first use, the agent runs `setup_env.sh` which handles all hardware detection and dependency installation automatically.
@@ -859,4 +859,4 @@ This skill transforms OpenClaw into a **full-featured TTS studio**:
 - 🖥️ **Auto-detect hardware** — works on CUDA, ROCm, Intel XPU, or CPU
 - 🐧 **Linux-native** — CachyOS/Arch first, all major distros supported
 - 🔌 **OpenAI-compatible API** — drop-in replacement, works with any OpenAI TTS client
-- 📦 **Shareable** — publish on GitHub & ClawHub as `daMustermann/qwen3-tts`
+- 📦 **Shareable** — publish on GitHub & ClawHub as `daMustermann/claw-qwen3-tts`

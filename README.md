@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![ClawHub](https://img.shields.io/badge/ClawHub-daMustermann%2Fqwen3--tts-purple.svg)](https://clawhub.dev/daMustermann/qwen3-tts)
+[![ClawHub](https://img.shields.io/badge/ClawHub-daMustermann%2Fclaw--qwen3--tts-purple.svg)](https://clawhub.dev/daMustermann/claw-qwen3-tts)
 
 > High-quality text-to-speech for OpenClaw agents. Voice cloning, voice design, 10+ languages, Telegram & WhatsApp voice messages. Auto-detects CUDA, ROCm, Intel XPU, or CPU.
 
@@ -10,10 +10,10 @@
 
 ```bash
 # Install from ClawHub
-claw install daMustermann/qwen3-tts
+claw install daMustermann/claw-qwen3-tts
 
 # Or clone manually
-git clone https://github.com/daMustermann/qwen3-tts.git ~/clawd/skills/qwen3-tts
+git clone https://github.com/daMustermann/claw-qwen3-tts.git ~/clawd/skills/qwen3-tts
 ```
 
 On first use, the agent automatically runs setup — detecting your GPU, creating a virtual environment, and installing all dependencies.
@@ -81,7 +81,7 @@ bash scripts/health_check.sh
 
 ## 🤝 Contributing
 
-Contributions welcome! Please open an issue or PR on [GitHub](https://github.com/daMustermann/qwen3-tts).
+Contributions welcome! Please open an issue or PR on [GitHub](https://github.com/daMustermann/claw-qwen3-tts).
 
 ## 📜 Credits
 
