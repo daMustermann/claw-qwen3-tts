@@ -35,7 +35,7 @@ check_system_deps() {
     distro=$(detect_distro)
     local missing=()
 
-    for cmd in python3 pip ffmpeg git; do
+    for cmd in python3 pip ffmpeg sox git; do
         if ! command -v "$cmd" &>/dev/null; then
             missing+=("$cmd")
         fi

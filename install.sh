@@ -34,7 +34,7 @@ echo ""
 info "Checking prerequisites..."
 
 MISSING=()
-for cmd in git python3 ffmpeg curl; do
+for cmd in git python3 ffmpeg sox curl; do
     if ! command -v "$cmd" &>/dev/null; then
         MISSING+=("$cmd")
     fi

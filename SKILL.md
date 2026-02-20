@@ -12,6 +12,7 @@ license: MIT
 requires:
   - python>=3.10
   - ffmpeg
+  - sox
   - git
 tags:
   - tts
