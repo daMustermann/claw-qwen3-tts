@@ -9,11 +9,15 @@
 ## ⚡ Quick Start
 
 ```bash
-# Install from ClawHub
+# One-command install (clones repo, detects GPU, sets up everything)
+bash <(curl -fsSL https://raw.githubusercontent.com/daMustermann/claw-qwen3-tts/main/install.sh)
+
+# Or install from ClawHub
 claw install daMustermann/claw-qwen3-tts
 
 # Or clone manually
 git clone https://github.com/daMustermann/claw-qwen3-tts.git ~/clawd/skills/qwen3-tts
+bash ~/clawd/skills/qwen3-tts/install.sh
 ```
 
 On first use, the agent automatically runs setup — detecting your GPU, creating a virtual environment, and installing all dependencies.

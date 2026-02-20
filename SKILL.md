@@ -31,10 +31,16 @@ You have access to a powerful text-to-speech system that can generate human-qual
 
 ## First-Time Setup
 
-If the server is not running (health check fails) or the `.venv/` directory does not exist:
+If the skill is not yet installed (no `~/clawd/skills/qwen3-tts` directory), run:
 
 ```bash
-bash ~/clawd/skills/qwen3-tts/scripts/setup_env.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/daMustermann/claw-qwen3-tts/main/install.sh)
+```
+
+Or if already cloned but not set up (no `.venv/` directory):
+
+```bash
+bash ~/clawd/skills/qwen3-tts/install.sh
 ```
 
 This auto-detects the GPU (CUDA, ROCm, Intel XPU, or CPU-only), creates a Python venv, and installs all dependencies. It takes 5-15 minutes on first run.
