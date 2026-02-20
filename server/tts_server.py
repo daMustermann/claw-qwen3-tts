@@ -74,6 +74,16 @@ MODELS = {
     "voice-design": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
 }
 
+# Models that support generate_custom_voice (built-in speakers)
+CUSTOM_VOICE_MODELS = {"custom-voice-0.6b", "custom-voice-1.7b"}
+
+# Auto-correction: if user requests a base/design model for speech, swap to custom-voice
+MODEL_AUTO_CORRECT = {
+    "base-0.6b": "custom-voice-0.6b",
+    "base-1.7b": "custom-voice-1.7b",
+    "voice-design": "custom-voice-1.7b",
+}
+
 
 # ─── Language mapping (OpenAI-compatible short codes → Qwen3-TTS full names) ───
 LANG_MAP = {
@@ -332,6 +342,13 @@ async def generate_speech(request: SpeechRequest):
     output_path = _generate_output_path("speech", "wav")
 
     try:
+        # Auto-correct model: base/design models don't support generate_custom_voice
+        model_name = request.model
+        if model_name in MODEL_AUTO_CORRECT:
+            corrected = MODEL_AUTO_CORRECT[model_name]
+            print(f"[INFO] Auto-correcting model {model_name} → {corrected} for speech endpoint")
+            model_name = corrected
+
         # Check if voice is a saved profile → use voice cloner
         if request.voice != "default" and voice_manager and voice_manager.voice_exists(request.voice):
             cloner = _get_voice_cloner()
@@ -360,7 +377,7 @@ async def generate_speech(request: SpeechRequest):
                 )
         else:
             # Use CustomVoice model with built-in speakers
-            model = _get_tts_model(request.model)
+            model = _get_tts_model(model_name)
 
             wavs, sr = model.generate_custom_voice(
                 text=request.input,
