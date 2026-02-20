@@ -61,20 +61,12 @@ class VoiceCloner:
             return
 
         try:
-            from qwen_tts import Qwen3TTSModel
+            from model_loader import load_model
 
-            attn_impl = self._get_attn_impl()
-            print(f"[INFO] Loading Base/Clone model with attn={attn_impl} on {self.device}")
-
-            kwargs = {
-                "device_map": self.device,
-                "dtype": torch.bfloat16,
-                "attn_implementation": attn_impl,
-            }
-            if self.cache_dir:
-                kwargs["cache_dir"] = self.cache_dir
-
-            self._model = Qwen3TTSModel.from_pretrained(self.model_id, **kwargs)
+            print(f"[INFO] Loading Base/Clone model on {self.device}")
+            self._model = load_model(
+                self.model_id, cache_dir=self.cache_dir, device=self.device
+            )
             self._loaded = True
             print("[OK] Base/Clone model loaded")
 

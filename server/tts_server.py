@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 sys.path.insert(0, str(Path(__file__).parent))
 
 from audio_converter import convert_audio, convert_to_ogg_opus, get_audio_info
+from model_loader import load_model, download_and_fix_model
 from voice_cloner import VoiceCloner
 from voice_designer import VoiceDesigner
 from voice_manager import VoiceManager
@@ -233,7 +234,7 @@ class WhatsAppSendRequest(BaseModel):
 # ═══════════════════════════════════════════════
 
 def _get_tts_model(model_name: str = "custom-voice-1.7b"):
-    """Lazy-load a TTS CustomVoice model."""
+    """Lazy-load a TTS model. Pre-downloads and fixes speech_tokenizer if needed."""
     global tts_model, tts_model_id
 
     if tts_model is not None and tts_model_id == model_name:
@@ -244,25 +245,13 @@ def _get_tts_model(model_name: str = "custom-voice-1.7b"):
         raise HTTPException(status_code=400, detail=f"Unknown model: {model_name}. Available: {list(MODELS.keys())}")
 
     try:
-        from qwen_tts import Qwen3TTSModel
-
         cache_dir = config.get("models", {}).get("cache_dir")
         device = get_device(config.get("models", {}).get("device"))
-        attn_impl = get_attn_impl()
 
-        print(f"[INFO] Loading model {model_name} ({model_hf_id}) on {device} with {attn_impl}")
-
-        kwargs = {
-            "device_map": device,
-            "dtype": torch.bfloat16,
-            "attn_implementation": attn_impl,
-        }
-        if cache_dir:
-            kwargs["cache_dir"] = cache_dir
-
-        tts_model = Qwen3TTSModel.from_pretrained(model_hf_id, **kwargs)
+        print(f"[INFO] Loading model {model_name} ({model_hf_id})")
+        tts_model = load_model(model_hf_id, cache_dir=cache_dir, device=device)
         tts_model_id = model_name
-        print(f"[OK] Model {model_name} loaded")
+        print(f"[OK] Model {model_name} ready")
         return tts_model
 
     except ImportError:
