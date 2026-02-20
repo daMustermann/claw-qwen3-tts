@@ -47,33 +47,33 @@ check_system_deps() {
         case "$distro" in
             cachyos|arch|endeavouros|manjaro)
                 echo "  Install with:"
-                echo "    sudo pacman -S python python-pip ffmpeg git base-devel"
+                echo "    sudo pacman -S python python-pip ffmpeg sox git base-devel"
                 ;;
             ubuntu|debian|linuxmint|pop)
                 echo "  Install with:"
-                echo "    sudo apt update && sudo apt install -y python3 python3-pip python3-venv ffmpeg git build-essential"
+                echo "    sudo apt update && sudo apt install -y python3 python3-pip python3-venv ffmpeg sox git build-essential"
                 ;;
             fedora|rhel|centos|rocky|alma)
                 echo "  Install with:"
-                echo "    sudo dnf install -y python3 python3-pip ffmpeg git gcc gcc-c++ make"
+                echo "    sudo dnf install -y python3 python3-pip ffmpeg sox git gcc gcc-c++ make"
                 ;;
             opensuse*|suse|sles)
                 echo "  Install with:"
-                echo "    sudo zypper install -y python3 python3-pip ffmpeg git gcc gcc-c++ make"
+                echo "    sudo zypper install -y python3 python3-pip ffmpeg sox git gcc gcc-c++ make"
                 ;;
             nixos)
                 echo "  Add to configuration.nix or use nix-shell:"
-                echo "    nix-shell -p python3 ffmpeg git"
+                echo "    nix-shell -p python3 ffmpeg sox git"
                 ;;
             *)
-                echo "  Please install: python3, pip, ffmpeg, git"
+                echo "  Please install: python3, pip, ffmpeg, sox, git"
                 ;;
         esac
         echo ""
         exit 1
     fi
 
-    ok "System dependencies OK (python3, pip, ffmpeg, git)"
+    ok "System dependencies OK (python3, pip, ffmpeg, sox, git)"
 }
 
 # ─── Check disk space ───
@@ -187,7 +187,7 @@ save_config() {
     "workers": 1
   },
   "models": {
-    "default_model": "base-1.7b",
+    "default_model": "custom-voice-1.7b",
     "cache_dir": "$SKILL_DIR/models/",
     "auto_download": true,
     "device": "auto"

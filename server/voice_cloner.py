@@ -1,15 +1,16 @@
 """
 voice_cloner.py — Clone voices from reference audio.
 
-Uses Qwen3-TTS-12Hz-0.6B-CustomVoice model to clone a voice from
-a short reference audio clip (minimum 3 seconds, recommended 10-30s),
-then generate new speech in that voice.
+Uses Qwen3-TTS-12Hz-1.7B-Base model to clone a voice from a reference
+audio clip and generate new speech in that voice.
+
+Supports reusable voice_clone_prompt for efficient multi-generation.
 """
 
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 import torch
 import soundfile as sf
@@ -28,42 +29,55 @@ class VoiceCloner:
 
     def __init__(
         self,
-        model_id: str = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
-        embedding_model_id: str = "Qwen/Qwen3-Voice-Embedding-12Hz-0.6B",
+        model_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
         cache_dir: Optional[str] = None,
         device: str = "auto",
     ):
         self.model_id = model_id
-        self.embedding_model_id = embedding_model_id
         self.cache_dir = cache_dir
         self.device = self._resolve_device(device)
         self._model = None
-        self._embedding_model = None
         self._loaded = False
 
     def _resolve_device(self, device: str) -> str:
         if device != "auto":
             return device
         if torch.cuda.is_available():
-            return "cuda"
+            return "cuda:0"
         if hasattr(torch, "xpu") and torch.xpu.is_available():
-            return "xpu"
+            return "xpu:0"
         return "cpu"
 
+    def _get_attn_impl(self) -> str:
+        try:
+            import flash_attn
+            return "flash_attention_2"
+        except ImportError:
+            return "sdpa"
+
     def _ensure_loaded(self):
-        """Lazy-load models on first use."""
+        """Lazy-load model on first use."""
         if self._loaded:
             return
 
         try:
-            from qwen_tts import QwenTTS
+            from qwen_tts import Qwen3TTSModel
 
-            self._model = QwenTTS.from_pretrained(
-                self.model_id,
-                cache_dir=self.cache_dir,
-                device=self.device,
-            )
+            attn_impl = self._get_attn_impl()
+            print(f"[INFO] Loading Base/Clone model with attn={attn_impl} on {self.device}")
+
+            kwargs = {
+                "device_map": self.device,
+                "dtype": torch.bfloat16,
+                "attn_implementation": attn_impl,
+            }
+            if self.cache_dir:
+                kwargs["cache_dir"] = self.cache_dir
+
+            self._model = Qwen3TTSModel.from_pretrained(self.model_id, **kwargs)
             self._loaded = True
+            print("[OK] Base/Clone model loaded")
+
         except ImportError:
             raise RuntimeError(
                 "qwen-tts package not installed. Run: pip install qwen-tts"
@@ -76,9 +90,8 @@ class VoiceCloner:
         text: str,
         reference_audio_path: str,
         reference_text: str = "",
-        language: str = "en",
+        language: str = "English",
         output_path: Optional[str] = None,
-        sample_rate: int = 24000,
     ) -> dict:
         """
         Clone a voice from reference audio and generate new speech.
@@ -87,15 +100,15 @@ class VoiceCloner:
             text: The new text to synthesize in the cloned voice
             reference_audio_path: Path to the reference audio file
             reference_text: Transcription of the reference audio (recommended)
-            language: Target language code
+            language: Target language (e.g. "English", "Chinese", "German")
             output_path: Where to save the output. If None, uses a temp file.
-            sample_rate: Audio sample rate
 
         Returns:
             dict with keys:
                 - audio_path: Path to the generated audio
                 - voice_id: Temporary voice ID for saving
-                - embedding: Speaker embedding tensor
+                - voice_clone_prompt: Reusable prompt object for future generations
+                - sample_rate: Audio sample rate
         """
         self._ensure_loaded()
 
@@ -104,91 +117,110 @@ class VoiceCloner:
                 f"Reference audio not found: {reference_audio_path}"
             )
 
-        # Check minimum duration
-        from audio_converter import get_audio_duration
-        duration = get_audio_duration(reference_audio_path)
-        if 0 < duration < 3.0:
-            raise ValueError(
-                f"Reference audio is too short ({duration:.1f}s). "
-                f"Minimum 3 seconds required, 10-30 seconds recommended."
-            )
-
         if output_path is None:
             fd, output_path = tempfile.mkstemp(suffix=".wav")
             os.close(fd)
 
         try:
-            # Generate cloned speech
-            result = self._model.generate_voice_clone(
-                text=text,
-                reference_audio=reference_audio_path,
-                reference_text=reference_text,
-                language=language,
+            # Build a reusable clone prompt
+            voice_clone_prompt = self._model.create_voice_clone_prompt(
+                ref_audio=reference_audio_path,
+                ref_text=reference_text if reference_text else None,
+                x_vector_only_mode=not bool(reference_text),
             )
 
-            # Extract audio and embedding
-            audio = result.get("audio", result.get("waveform", None))
-            embedding = result.get("speaker_embedding", result.get("embedding", None))
+            # Generate cloned speech
+            wavs, sr = self._model.generate_voice_clone(
+                text=text,
+                language=language,
+                voice_clone_prompt=voice_clone_prompt,
+            )
 
-            if audio is None:
-                raise RuntimeError("Model did not return audio data")
+            audio = wavs[0]
+            sf.write(output_path, audio, sr)
 
-            # Convert to numpy if tensor
-            if isinstance(audio, torch.Tensor):
-                audio = audio.cpu().numpy()
-
-            # Ensure 1D
-            if audio.ndim > 1:
-                audio = audio.squeeze()
-
-            # Save audio
-            sf.write(output_path, audio, sample_rate)
-
-            # Generate a temporary voice ID
             voice_id = f"vc_{hash(reference_audio_path) & 0xFFFFFFFF:08x}"
 
             return {
                 "audio_path": output_path,
                 "voice_id": voice_id,
-                "embedding": embedding,
-                "reference_audio": reference_audio_path,
-                "reference_text": reference_text,
-                "sample_rate": sample_rate,
+                "voice_clone_prompt": voice_clone_prompt,
+                "sample_rate": sr,
             }
 
         except Exception as e:
             raise RuntimeError(f"Voice cloning failed: {e}")
 
-    def extract_embedding(self, audio_path: str) -> Optional[torch.Tensor]:
+    def clone_from_prompt(
+        self,
+        text: str,
+        voice_clone_prompt: Any,
+        language: str = "English",
+        output_path: Optional[str] = None,
+    ) -> dict:
         """
-        Extract a speaker embedding from an audio file without generating speech.
+        Generate speech using a pre-built voice_clone_prompt.
 
-        Useful for pre-processing reference audio into a reusable embedding.
+        This is more efficient for repeated use of the same voice,
+        as it skips re-extracting features from reference audio.
         """
-        try:
-            from qwen_tts import QwenTTS
+        self._ensure_loaded()
 
-            if self._embedding_model is None:
-                self._embedding_model = QwenTTS.from_pretrained(
-                    self.embedding_model_id,
-                    cache_dir=self.cache_dir,
-                    device=self.device,
-                )
+        if output_path is None:
+            fd, output_path = tempfile.mkstemp(suffix=".wav")
+            os.close(fd)
 
-            result = self._embedding_model.extract_embedding(audio_path)
-            return result.get("embedding", result.get("speaker_embedding", None))
+        wavs, sr = self._model.generate_voice_clone(
+            text=text,
+            language=language,
+            voice_clone_prompt=voice_clone_prompt,
+        )
 
-        except Exception as e:
-            print(f"[WARN] Embedding extraction failed: {e}")
-            return None
+        audio = wavs[0]
+        sf.write(output_path, audio, sr)
+
+        return {
+            "audio_path": output_path,
+            "sample_rate": sr,
+        }
+
+    def create_prompt_from_audio(
+        self,
+        ref_audio_path: str,
+        ref_text: str = "",
+    ) -> Any:
+        """
+        Create a reusable voice_clone_prompt from reference audio.
+        """
+        self._ensure_loaded()
+        return self._model.create_voice_clone_prompt(
+            ref_audio=ref_audio_path,
+            ref_text=ref_text if ref_text else None,
+            x_vector_only_mode=not bool(ref_text),
+        )
+
+    def create_prompt_from_audio_data(
+        self,
+        audio_data,
+        sample_rate: int,
+        ref_text: str = "",
+    ) -> Any:
+        """
+        Create a reusable voice_clone_prompt from audio data (numpy array + sample rate).
+        Used for the Voice Design → Clone pipeline.
+        """
+        self._ensure_loaded()
+        return self._model.create_voice_clone_prompt(
+            ref_audio=(audio_data, sample_rate),
+            ref_text=ref_text if ref_text else None,
+            x_vector_only_mode=not bool(ref_text),
+        )
 
     def unload(self):
         """Unload models to free memory."""
-        for model in [self._model, self._embedding_model]:
-            if model is not None:
-                del model
+        if self._model is not None:
+            del self._model
         self._model = None
-        self._embedding_model = None
         self._loaded = False
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

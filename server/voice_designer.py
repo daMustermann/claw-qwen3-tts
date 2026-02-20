@@ -2,8 +2,7 @@
 voice_designer.py — Create new voices from natural language descriptions.
 
 Uses Qwen3-TTS-12Hz-1.7B-VoiceDesign model to generate speech with
-a voice matching the given description, and optionally extracts the
-speaker embedding for persistence.
+a voice matching the given description.
 """
 
 import os
@@ -19,10 +18,8 @@ class VoiceDesigner:
     """
     Generates speech using a natural language voice description.
 
-    The voice-design model takes a text description of the desired voice
-    (e.g. "a warm British male voice, calm and authoritative") and produces
-    speech in that style. The resulting speaker embedding can be saved
-    for future reuse.
+    The voice-design model takes a text description (instruct) of the desired voice
+    and produces speech in that style.
     """
 
     def __init__(self, model_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
@@ -37,10 +34,18 @@ class VoiceDesigner:
         if device != "auto":
             return device
         if torch.cuda.is_available():
-            return "cuda"
+            return "cuda:0"
         if hasattr(torch, "xpu") and torch.xpu.is_available():
-            return "xpu"
+            return "xpu:0"
         return "cpu"
+
+    def _get_attn_impl(self) -> str:
+        """Choose attention implementation based on flash-attn availability."""
+        try:
+            import flash_attn
+            return "flash_attention_2"
+        except ImportError:
+            return "sdpa"
 
     def _ensure_loaded(self):
         """Lazy-load the model on first use."""
@@ -48,13 +53,23 @@ class VoiceDesigner:
             return
 
         try:
-            from qwen_tts import QwenTTS
-            self._model = QwenTTS.from_pretrained(
-                self.model_id,
-                cache_dir=self.cache_dir,
-                device=self.device,
-            )
+            from qwen_tts import Qwen3TTSModel
+
+            attn_impl = self._get_attn_impl()
+            print(f"[INFO] Loading VoiceDesign model with attn={attn_impl} on {self.device}")
+
+            kwargs = {
+                "device_map": self.device,
+                "dtype": torch.bfloat16,
+                "attn_implementation": attn_impl,
+            }
+            if self.cache_dir:
+                kwargs["cache_dir"] = self.cache_dir
+
+            self._model = Qwen3TTSModel.from_pretrained(self.model_id, **kwargs)
             self._loaded = True
+            print("[OK] VoiceDesign model loaded")
+
         except ImportError:
             raise RuntimeError(
                 "qwen-tts package not installed. Run: pip install qwen-tts"
@@ -66,25 +81,24 @@ class VoiceDesigner:
         self,
         text: str,
         voice_description: str,
-        language: str = "en",
+        language: str = "English",
         output_path: Optional[str] = None,
-        sample_rate: int = 24000,
     ) -> dict:
         """
         Generate speech with a designed voice.
 
         Args:
             text: The text to synthesize
-            voice_description: Natural language description of the desired voice
-            language: Target language code
+            voice_description: Natural language description of the desired voice (instruct)
+            language: Target language (e.g. "English", "Chinese", "German")
             output_path: Where to save the audio. If None, uses a temp file.
-            sample_rate: Audio sample rate
 
         Returns:
             dict with keys:
                 - audio_path: Path to the generated audio file
                 - voice_id: Temporary voice ID for saving
-                - embedding: Speaker embedding tensor (if extractable)
+                - sample_rate: Audio sample rate
+                - ref_text: The text that was synthesized (for clone prompt reuse)
         """
         self._ensure_loaded()
 
@@ -93,39 +107,23 @@ class VoiceDesigner:
             os.close(fd)
 
         try:
-            # Generate speech with voice design
-            result = self._model.generate_voice_design(
+            wavs, sr = self._model.generate_voice_design(
                 text=text,
-                voice_description=voice_description,
                 language=language,
+                instruct=voice_description,
             )
 
-            # Extract audio and embedding
-            audio = result.get("audio", result.get("waveform", None))
-            embedding = result.get("speaker_embedding", result.get("embedding", None))
+            audio = wavs[0]
+            sf.write(output_path, audio, sr)
 
-            if audio is None:
-                raise RuntimeError("Model did not return audio data")
-
-            # Convert to numpy if tensor
-            if isinstance(audio, torch.Tensor):
-                audio = audio.cpu().numpy()
-
-            # Ensure 1D
-            if audio.ndim > 1:
-                audio = audio.squeeze()
-
-            # Save audio
-            sf.write(output_path, audio, sample_rate)
-
-            # Generate a temporary voice ID
             voice_id = f"vd_{hash(voice_description) & 0xFFFFFFFF:08x}"
 
             return {
                 "audio_path": output_path,
+                "audio_data": audio,
                 "voice_id": voice_id,
-                "embedding": embedding,
-                "sample_rate": sample_rate,
+                "sample_rate": sr,
+                "ref_text": text,
             }
 
         except Exception as e:

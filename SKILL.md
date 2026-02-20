@@ -75,18 +75,22 @@ The server runs at `http://localhost:8880`.
 curl -X POST http://localhost:8880/v1/audio/speech \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "base-1.7b",
+    "model": "custom-voice-1.7b",
     "input": "TEXT_HERE",
-    "voice": "VOICE_NAME_OR_default",
+    "voice": "default",
+    "speaker": "Chelsie",
     "language": "en",
+    "instruct": "",
     "response_format": "wav"
   }' \
   --output ~/clawd/skills/qwen3-tts/output/speech.wav
 ```
 
-- **Supported languages:** en, zh, ja, ko, de, fr, ru, pt, es, it
+- **Supported languages:** en, zh, ja, ko, de, fr, ru, pt, es, it (or full names: English, Chinese, etc.)
 - **Supported formats:** wav, mp3, ogg, flac
-- **Voice:** Use `"default"` or any saved voice name (e.g. `"Angie"`)
+- **Built-in speakers:** Chelsie, Ethan, Aidan, Serena, Ryan, Vivian, Claire, Lucas, Eleanor, Benjamin
+- **Voice:** Use `"default"` for built-in speakers, or a saved voice name (e.g. `"Angie"`)
+- **instruct:** Optional emotional/style instruction (e.g. `"Speak happily"`, `"用愤怒的语气"`)
 
 ### 2. Design a New Voice
 

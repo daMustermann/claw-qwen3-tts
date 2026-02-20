@@ -5,7 +5,7 @@
     "workers": 1
   },
   "models": {
-    "default_model": "base-1.7b",
+    "default_model": "custom-voice-1.7b",
     "cache_dir": "~/clawd/skills/qwen3-tts/models/",
     "auto_download": true,
     "device": "auto"

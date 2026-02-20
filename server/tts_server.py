@@ -9,6 +9,8 @@ Provides a comprehensive TTS API with:
   - Audio format conversion
   - Telegram & WhatsApp PTT voice message delivery
 
+Uses the official qwen_tts.Qwen3TTSModel API.
+
 Author: daMustermann · Version: 1.0
 """
 
@@ -19,7 +21,7 @@ import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 import soundfile as sf
 import torch
@@ -47,7 +49,7 @@ def load_config() -> dict:
             return json.load(f)
     return {
         "models": {
-            "default_model": "base-1.7b",
+            "default_model": "custom-voice-1.7b",
             "cache_dir": str(SKILL_DIR / "models"),
             "auto_download": True,
             "device": "auto",
@@ -65,12 +67,30 @@ def load_config() -> dict:
 
 # ─── Model registry ───
 MODELS = {
+    "custom-voice-0.6b": "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+    "custom-voice-1.7b": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
     "base-0.6b": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
     "base-1.7b": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
     "voice-design": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-    "custom-voice": "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
-    "voice-embed": "Qwen/Qwen3-Voice-Embedding-12Hz-0.6B",
 }
+
+
+# ─── Language mapping (OpenAI-compatible short codes → Qwen3-TTS full names) ───
+LANG_MAP = {
+    "en": "English", "zh": "Chinese", "ja": "Japanese", "ko": "Korean",
+    "de": "German", "fr": "French", "ru": "Russian", "pt": "Portuguese",
+    "es": "Spanish", "it": "Italian", "auto": "Auto",
+    # Also accept full names directly
+    "english": "English", "chinese": "Chinese", "japanese": "Japanese",
+    "korean": "Korean", "german": "German", "french": "French",
+    "russian": "Russian", "portuguese": "Portuguese", "spanish": "Spanish",
+    "italian": "Italian",
+}
+
+
+def normalize_language(lang: str) -> str:
+    """Convert short language codes to Qwen3-TTS format."""
+    return LANG_MAP.get(lang.lower(), lang)
 
 
 # ─── Device detection ───
@@ -78,10 +98,18 @@ def get_device(override: Optional[str] = None) -> str:
     if override and override != "auto":
         return override
     if torch.cuda.is_available():
-        return "cuda"
+        return "cuda:0"
     if hasattr(torch, "xpu") and torch.xpu.is_available():
-        return "xpu"
+        return "xpu:0"
     return "cpu"
+
+
+def get_attn_impl() -> str:
+    try:
+        import flash_attn
+        return "flash_attention_2"
+    except ImportError:
+        return "sdpa"
 
 
 # ─── Globals (initialized at startup) ───
@@ -93,8 +121,9 @@ tts_model = None
 tts_model_id: Optional[str] = None
 output_dir: Path = SKILL_DIR / "output"
 
-# Temporary storage for voice embeddings from recent generations
-_temp_voice_store: dict[str, torch.Tensor] = {}
+# Temporary storage for voice data from recent design/clone operations
+# Maps voice_id -> { "ref_audio_path": str, "ref_text": str, "audio_data": ndarray, "sample_rate": int }
+_temp_voice_store: dict[str, dict] = {}
 
 
 @asynccontextmanager
@@ -113,7 +142,8 @@ async def lifespan(app: FastAPI):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     device = get_device(config.get("models", {}).get("device"))
-    print(f"[INFO] Qwen3-TTS server starting on device: {device}")
+    attn = get_attn_impl()
+    print(f"[INFO] Qwen3-TTS server starting on device: {device}, attention: {attn}")
     print(f"[INFO] Voices directory: {voices_dir}")
     print(f"[INFO] Output directory: {output_dir}")
     print(f"[INFO] Loaded {len(voice_manager.list_voices())} saved voices")
@@ -141,10 +171,12 @@ app = FastAPI(
 # ═══════════════════════════════════════════════
 
 class SpeechRequest(BaseModel):
-    model: str = "base-1.7b"
+    model: str = "custom-voice-1.7b"
     input: str
     voice: str = "default"
+    speaker: str = "Chelsie"
     language: str = "en"
+    instruct: str = ""
     response_format: str = "wav"
     speed: float = 1.0
 
@@ -190,8 +222,8 @@ class WhatsAppSendRequest(BaseModel):
 #  Helper Functions
 # ═══════════════════════════════════════════════
 
-def _get_tts_model(model_name: str = "base-1.7b"):
-    """Lazy-load a TTS base model."""
+def _get_tts_model(model_name: str = "custom-voice-1.7b"):
+    """Lazy-load a TTS CustomVoice model."""
     global tts_model, tts_model_id
 
     if tts_model is not None and tts_model_id == model_name:
@@ -199,20 +231,30 @@ def _get_tts_model(model_name: str = "base-1.7b"):
 
     model_hf_id = MODELS.get(model_name)
     if not model_hf_id:
-        raise HTTPException(status_code=400, detail=f"Unknown model: {model_name}")
+        raise HTTPException(status_code=400, detail=f"Unknown model: {model_name}. Available: {list(MODELS.keys())}")
 
     try:
-        from qwen_tts import QwenTTS
+        from qwen_tts import Qwen3TTSModel
+
         cache_dir = config.get("models", {}).get("cache_dir")
         device = get_device(config.get("models", {}).get("device"))
+        attn_impl = get_attn_impl()
 
-        tts_model = QwenTTS.from_pretrained(
-            model_hf_id,
-            cache_dir=cache_dir,
-            device=device,
-        )
+        print(f"[INFO] Loading model {model_name} ({model_hf_id}) on {device} with {attn_impl}")
+
+        kwargs = {
+            "device_map": device,
+            "dtype": torch.bfloat16,
+            "attn_implementation": attn_impl,
+        }
+        if cache_dir:
+            kwargs["cache_dir"] = cache_dir
+
+        tts_model = Qwen3TTSModel.from_pretrained(model_hf_id, **kwargs)
         tts_model_id = model_name
+        print(f"[OK] Model {model_name} loaded")
         return tts_model
+
     except ImportError:
         raise HTTPException(
             status_code=500,
@@ -267,6 +309,7 @@ async def health_check():
     return {
         "status": "ok",
         "device": device,
+        "attn_implementation": get_attn_impl(),
         "cuda_available": torch.cuda.is_available(),
         "saved_voices": len(voices),
         "version": "1.0",
@@ -282,47 +325,52 @@ async def generate_speech(request: SpeechRequest):
     """
     Generate speech from text. OpenAI-compatible endpoint.
 
-    If `voice` is set to a saved voice name, uses that voice's embedding.
+    Uses the CustomVoice model with built-in speakers (Chelsie, Ethan, etc.)
+    or a saved voice via the voice cloner.
     """
-    model = _get_tts_model(request.model)
-    sample_rate = config.get("audio", {}).get("sample_rate", 24000)
+    language = normalize_language(request.language)
     output_path = _generate_output_path("speech", "wav")
 
     try:
-        # Check if voice is a saved profile
-        embedding = None
-        if request.voice != "default" and voice_manager:
-            embedding = voice_manager.load_embedding(request.voice)
-            if embedding is None and request.voice.lower() != "default":
-                # Check temp store
-                embedding = _temp_voice_store.get(request.voice)
+        # Check if voice is a saved profile → use voice cloner
+        if request.voice != "default" and voice_manager and voice_manager.voice_exists(request.voice):
+            cloner = _get_voice_cloner()
 
-        # Generate speech
-        if embedding is not None:
-            result = model.generate(
-                text=request.input,
-                speaker_embedding=embedding,
-                language=request.language,
-                speed=request.speed,
-            )
+            # Load the saved voice's reference audio for cloning
+            profile = voice_manager.get_voice(request.voice)
+            if profile is None:
+                raise HTTPException(status_code=404, detail=f"Voice '{request.voice}' not found")
+
+            # Load the saved reference audio and create a clone prompt
+            sample_path = voice_manager.voices_dir / profile.sample_audio if profile.sample_audio else None
+            if sample_path and sample_path.exists():
+                result = cloner.clone(
+                    text=request.input,
+                    reference_audio_path=str(sample_path),
+                    reference_text="",
+                    language=language,
+                    output_path=output_path,
+                )
+                # Increment usage
+                voice_manager.load_embedding(request.voice)
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Voice '{request.voice}' has no saved sample audio for cloning.",
+                )
         else:
-            result = model.generate(
+            # Use CustomVoice model with built-in speakers
+            model = _get_tts_model(request.model)
+
+            wavs, sr = model.generate_custom_voice(
                 text=request.input,
-                language=request.language,
-                speed=request.speed,
+                language=language,
+                speaker=request.speaker,
+                instruct=request.instruct if request.instruct else None,
             )
 
-        # Extract audio
-        audio = result.get("audio", result.get("waveform"))
-        if audio is None:
-            raise HTTPException(status_code=500, detail="Model returned no audio")
-
-        if isinstance(audio, torch.Tensor):
-            audio = audio.cpu().numpy()
-        if audio.ndim > 1:
-            audio = audio.squeeze()
-
-        sf.write(output_path, audio, sample_rate)
+            audio = wavs[0]
+            sf.write(output_path, audio, sr)
 
         # Convert to requested format
         final_path = _convert_if_needed(output_path, request.response_format)
@@ -347,20 +395,27 @@ async def generate_speech(request: SpeechRequest):
 async def design_voice(request: VoiceDesignRequest):
     """Generate speech with a natural-language voice description."""
     designer = _get_voice_designer()
+    language = normalize_language(request.language)
     output_path = _generate_output_path("vdesign", "wav")
 
     try:
         result = designer.generate(
             text=request.input,
             voice_description=request.voice_description,
-            language=request.language,
+            language=language,
             output_path=output_path,
         )
 
-        # Store embedding temporarily for potential saving
+        # Store reference data for potential saving
         voice_id = result.get("voice_id", "")
-        if result.get("embedding") is not None:
-            _temp_voice_store[voice_id] = result["embedding"]
+        _temp_voice_store[voice_id] = {
+            "audio_path": result["audio_path"],
+            "audio_data": result.get("audio_data"),
+            "sample_rate": result.get("sample_rate"),
+            "ref_text": result.get("ref_text", request.input),
+            "source": "voice-design",
+            "description": request.voice_description,
+        }
 
         # Convert to requested format
         final_path = _convert_if_needed(output_path, request.response_format)
@@ -390,6 +445,7 @@ async def clone_voice(
 ):
     """Clone a voice from reference audio and generate new speech."""
     cloner = _get_voice_cloner()
+    lang = normalize_language(language)
     output_path = _generate_output_path("vclone", "wav")
 
     # Save uploaded reference audio to temp file
@@ -404,14 +460,25 @@ async def clone_voice(
             text=input,
             reference_audio_path=ref_path,
             reference_text=reference_text,
-            language=language,
+            language=lang,
             output_path=output_path,
         )
 
-        # Store embedding temporarily
+        # Store reference data for potential saving
         voice_id = result.get("voice_id", "")
-        if result.get("embedding") is not None:
-            _temp_voice_store[voice_id] = result["embedding"]
+
+        # Copy ref audio to a persistent temp location (don't delete yet)
+        import shutil
+        persist_ref_path = str(output_dir / f"ref_{voice_id}.wav")
+        shutil.copy2(ref_path, persist_ref_path)
+
+        _temp_voice_store[voice_id] = {
+            "audio_path": result["audio_path"],
+            "ref_audio_path": persist_ref_path,
+            "ref_text": reference_text,
+            "source": "voice-clone",
+            "description": f"Cloned from uploaded audio",
+        }
 
         # Convert to requested format
         final_path = _convert_if_needed(output_path, response_format)
@@ -428,7 +495,7 @@ async def clone_voice(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Voice cloning failed: {e}")
     finally:
-        # Clean up temp reference file
+        # Clean up temp reference file (we saved a copy)
         if os.path.exists(ref_path):
             os.remove(ref_path)
 
@@ -447,37 +514,48 @@ async def list_voices():
 
 @app.post("/v1/voices")
 async def save_voice(request: VoiceSaveRequest):
-    """Save/persist a voice profile with a user-chosen name."""
+    """
+    Save/persist a voice profile with a user-chosen name.
+
+    The source_voice_id must match a voice_id from a recent voice-design
+    or voice-clone operation.
+    """
     if not voice_manager:
         raise HTTPException(status_code=500, detail="Voice manager not initialized")
 
-    # Check for duplicates
     if voice_manager.voice_exists(request.name):
         raise HTTPException(
             status_code=409,
             detail=f"Voice '{request.name}' already exists. Choose a different name or delete the existing one.",
         )
 
-    # Get embedding from temp store or raise error
-    embedding = None
+    # Get stored voice data
+    voice_data = None
     if request.source_voice_id:
-        embedding = _temp_voice_store.pop(request.source_voice_id, None)
+        voice_data = _temp_voice_store.pop(request.source_voice_id, None)
 
-    if embedding is None:
+    if voice_data is None:
         raise HTTPException(
             status_code=400,
-            detail="No voice embedding found. Generate a voice first using voice-design or voice-clone.",
+            detail="No voice data found. Generate a voice first using voice-design or voice-clone.",
         )
 
     try:
+        # Save the reference audio as the voice's sample
+        sample_audio_path = voice_data.get("audio_path") or voice_data.get("ref_audio_path")
+
+        # Create a dummy embedding (the actual voice is stored as sample audio for re-cloning)
+        embedding = torch.zeros(1)  # Placeholder — the real data is the sample audio
+
         profile = voice_manager.save_voice(
             name=request.name,
             embedding=embedding,
-            description=request.description,
-            source="voice-design" if request.source_voice_id and request.source_voice_id.startswith("vd_") else "voice-clone",
-            source_description=request.description,
+            description=request.description or voice_data.get("description", ""),
+            source=voice_data.get("source", "unknown"),
+            source_description=voice_data.get("description", ""),
             language=request.language,
             tags=request.tags,
+            sample_audio_path=sample_audio_path,
         )
         return {"status": "saved", "voice": profile.to_dict()}
 
@@ -550,7 +628,6 @@ async def convert_audio_format(
     target_format: str = Form("ogg"),
 ):
     """Convert audio between formats (WAV, MP3, OGG/Opus, FLAC)."""
-    # Save uploaded audio
     in_suffix = Path(audio.filename or "input.wav").suffix or ".wav"
     fd, input_path = tempfile.mkstemp(suffix=in_suffix)
     try:
@@ -655,6 +732,23 @@ async def list_models():
             for key, val in MODELS.items()
         ]
     }
+
+
+@app.get("/v1/speakers")
+async def list_speakers():
+    """List built-in speakers for CustomVoice models."""
+    try:
+        model = _get_tts_model()
+        speakers = model.get_supported_speakers()
+        return {"speakers": speakers}
+    except Exception:
+        # Fallback if model not loaded
+        return {
+            "speakers": [
+                "Chelsie", "Ethan", "Aidan", "Serena", "Ryan",
+                "Vivian", "Claire", "Lucas", "Eleanor", "Benjamin",
+            ]
+        }
 
 
 if __name__ == "__main__":
